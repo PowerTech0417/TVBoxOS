@@ -19,7 +19,7 @@ on:
         default: 'main'
         type: string
       architectures:
-        description: '架构类型 (Architecture)'
+        description: '架构类型'
         required: true
         default: 'universal'
         type: choice
@@ -81,18 +81,21 @@ jobs:
           ARCH_INPUT="${{ github.event.inputs.architectures }}"
           
           if [ -f "app/build.gradle" ]; then
-            # 清除原有的 abiFilters 限制
+            # 删除旧的限制
             sed -i '/abiFilters/d' app/build.gradle
             
+            # 根据选择准备配置内容
             if [ "$ARCH_INPUT" = "universal" ]; then
-              echo "✅ Version Universelle : support arm64-v8a et armeabi-v7a"
-              # 注入通用架构配置
-              sed -i 's/defaultConfig {/defaultConfig { \n        ndk { abiFilters "arm64-v8a", "armeabi-v7a" }/g' app/build.gradle
+              NDK_CONF='ndk { abiFilters "arm64-v8a", "armeabi-v7a" }'
             else
-              echo "✅ Version spécifique : $ARCH_INPUT"
-              # 注入单一架构配置
-              sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$ARCH_INPUT\" }/g" app/build.gradle
+              NDK_CONF="ndk { abiFilters '$ARCH_INPUT' }"
             fi
+            
+            # 使用替换模式，完全不使用 \n 换行符，避免 YAML 语法错误
+            # 逻辑：在 defaultConfig { 后面直接插入 NDK 配置
+            sed -i "s/defaultConfig {/defaultConfig { $NDK_CONF /g" app/build.gradle
+            
+            echo "✅ Configuré : $NDK_CONF"
           fi
           
       - name: Build with Gradle
