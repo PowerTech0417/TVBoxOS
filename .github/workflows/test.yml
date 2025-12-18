@@ -223,21 +223,54 @@ jobs:
         run: |
           #zip -q -x ".git/*" -x  ".github/*" -r sourceCode-${{ env.commitS }}.zip .
           tar -cJf sourceCode-${{ env.commitS }}.tar.xz --exclude=.git --exclude=.github *
+      
       - name: Release Apk Sign
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          signingConfigs='ICAgIHNpZ25pbmdDb25maWdzIHtcCiAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICBteUNvbmZpZyB7XAogICAgICAgICAgICAgICAgc3RvcmVGaWxlIGZpbGUoUkVMRUFTRV9TVE9SRV9GSUxFKVwKICAgICAgICAgICAgICAgIHN0b3JlUGFzc3dvcmQgUkVMRUFTRV9TVE9SRV9QQVNTV09SRFcKICAgICAgICAgICAgICAgIGtleUFsaWFzIFJFTEVBU0VfS0VZX0FMSUFTXAogICAgICAgICAgICAgICAga2V5UGFzc3dvcmQgUkVMRUFTRV9LRVlfUEFTU1dPUkRcCiAgICAgICAgICAgICAgICB2MVNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICB2MlNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICBlbmFibGVWM1NpZ25pbmcgPSB0cnVlXAogICAgICAgICAgICAgICAgZW5hYmxlVjRTaWduaW5nID0gdHJ1ZVwKICAgICAgICAgICAgfVwKICAgICAgICB9XAogICAgfVwKXA=='
-          signingConfig='ICAgICAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICAgICAgc2lnbmluZ0NvbmZpZyBzaWduaW5nQ29uZmlncy5teUNvbmZpZ1wKICAgICAgICAgICAgfVwK'
-          signingConfigs="$(echo "$signingConfigs" |base64 -d )"
-          signingConfig="$(echo "$signingConfig" |base64 -d )"
-          sed -i -e "/defaultConfig {/i\\$signingConfigs " -e "/debug {/a\\$signingConfig " -e "/release {/a\\$signingConfig " app/build.gradle
+          # 修复 base64 字符串中的问题
+          # 使用更简单的签名配置
+          cat > signing_config.gradle << 'EOF'
+          signingConfigs {
+              if (project.hasProperty("RELEASE_STORE_FILE")) {
+                  myConfig {
+                      storeFile file(RELEASE_STORE_FILE)
+                      storePassword RELEASE_STORE_PASSWORD
+                      keyAlias RELEASE_KEY_ALIAS
+                      keyPassword RELEASE_KEY_PASSWORD
+                      v1SigningEnabled true
+                      v2SigningEnabled true
+                      enableV3Signing = true
+                      enableV4Signing = true
+                  }
+              }
+          }
+          EOF
+          
+          # 直接写入到 build.gradle
+          sed -i '/defaultConfig {/r signing_config.gradle' app/build.gradle
+          
+          # 添加签名配置到 buildTypes
+          sed -i '/debug {/a\            if (project.hasProperty("RELEASE_STORE_FILE")) {\n                signingConfig signingConfigs.myConfig\n            }' app/build.gradle
+          sed -i '/release {/a\            if (project.hasProperty("RELEASE_STORE_FILE")) {\n                signingConfig signingConfigs.myConfig\n            }' app/build.gradle
+          
+          # 复制签名文件
           cp -f ${{ github.workspace }}/.github/workflows/TVBoxOSC.jks app/TVBoxOSC.jks
-          sed -i '$a\RELEASE_STORE_FILE=./TVBoxOSC.jks'     ./gradle.properties
-          sed -i '$a\RELEASE_KEY_ALIAS=TVBoxOSC'            ./gradle.properties
-          sed -i '$a\RELEASE_STORE_PASSWORD=TVBoxOSC'       ./gradle.properties
-          sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
-          sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/'        ./gradle.properties
+          
+          # 添加签名配置到 gradle.properties
+          echo "" >> gradle.properties
+          echo "# 签名配置" >> gradle.properties
+          echo "RELEASE_STORE_FILE=./TVBoxOSC.jks" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=TVBoxOSC" >> gradle.properties
+          echo "RELEASE_STORE_PASSWORD=TVBoxOSC" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=TVBoxOSC" >> gradle.properties
+          
+          # 确保 gradle 配置正确
+          sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/' gradle.properties
+          
+          # 显示修改后的配置
+          echo "=== 签名配置已添加 ==="
+          tail -10 gradle.properties
       
       - uses: actions/setup-java@v4
         if: ${{ matrix.java_ver }}
