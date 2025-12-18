@@ -41,6 +41,10 @@ on:
   schedule:
     - cron: '0 13 1 * *'
 
+# 全局环境变量，确保所有 Job 都能访问
+env:
+  GLOBAL_TAG: "TVBox-${{ github.event.inputs.branch_name || 'main' }}-${{ github.run_id }}"
+
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
@@ -73,7 +77,6 @@ jobs:
           for TYPE in "${TYPES[@]}"; do
             for ARCH in "${ARCH_LIST[@]}"; do
               VARIANT="Release"
-              
               if [[ "$ARCH" == "arm64" ]]; then
                 ABI_FILTERS='["arm64-v8a"]'
               elif [[ "$ARCH" == "arm7" ]]; then
@@ -102,13 +105,9 @@ jobs:
         
       - name: Clone Source Code
         run: |
-          USER_NAME="${{ github.event.inputs.user_name || 'q215613905' }}"
-          REPO_NAME="${{ github.event.inputs.repo_name || 'TVBoxOS' }}"
-          BRANCH_NAME="${{ github.event.inputs.branch_name || 'main' }}"
-          git clone https://github.com/$USER_NAME/$REPO_NAME.git TVBoxOSC
+          git clone https://github.com/${{ github.event.inputs.user_name }}/${{ github.event.inputs.repo_name }}.git TVBoxOSC
           cd TVBoxOSC
-          git checkout $BRANCH_NAME
-          echo "tag=TVBox-$(date '+%Y%m%d-%H%M')" >> $GITHUB_ENV
+          git checkout ${{ github.event.inputs.branch_name }}
           
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -127,12 +126,9 @@ jobs:
           CLEAN_ABI=$(echo $ABI_LIST | tr -d '[]" ')
           
           if [ -f "app/build.gradle" ]; then
-            # 删除旧的限制
             sed -i '/abiFilters/d' app/build.gradle
-            
             if [ -n "$CLEAN_ABI" ]; then
                FORMATTED_ABI=$(echo $CLEAN_ABI | sed 's/,/","/g')
-               # 采用更加稳健的单行替换方式，避免使用反斜杠
                sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$FORMATTED_ABI\" }/g" app/build.gradle
                echo "✅ Filtres appliqués: $CLEAN_ABI"
             fi
@@ -148,11 +144,10 @@ jobs:
         working-directory: TVBoxOSC
         run: |
           mkdir -p output/release
-          TAG="${{ env.tag }}"
+          TAG="${{ env.GLOBAL_TAG }}"
           find app/build/outputs/apk/ -name "*.apk" -type f | while read file; do
             NEW_NAME="TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}-${TAG}.apk"
             cp "$file" "output/release/$NEW_NAME"
-            echo "📦 APK Traité: $NEW_NAME"
           done
           
       - name: Upload Artifacts
@@ -174,8 +169,9 @@ jobs:
         run: |
           mkdir -p final-release
           find all-apks -name "*.apk" -exec cp {} final-release/ \;
+          echo "✅ Fichiers regroupés avec succès."
       - name: Upload Final Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-Universal-Bundle
+          name: ${{ env.GLOBAL_TAG }}-Complete
           path: final-release/
