@@ -8,7 +8,7 @@ on:
         description: 'GitHub用户名'
         required: true
         default: 'q215613905'
-        type: string
+        type: 'string'
       repo_name:
         description: '仓库名'
         required: true
@@ -18,12 +18,12 @@ on:
         description: '分支名'
         required: true
         default: 'main'
-        type: string
+        type: 'string'
       build_types:
         description: '构建类型'
         required: true
         default: 'all'
-        type: choice
+        type: 'choice'
         options:
           - all
           - mobile
@@ -34,7 +34,7 @@ on:
         description: '架构类型'
         required: true
         default: 'universal'
-        type: choice
+        type: 'choice'
         options:
           - universal
           - arm64
