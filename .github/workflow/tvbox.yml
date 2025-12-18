@@ -1,0 +1,307 @@
+name: TVBox Multi-Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_name:
+        description: 'GitHub用户名'
+        required: true
+        default: 'q215613905'
+        type: string
+      repo_name:
+        description: '仓库名'
+        required: true
+        default: 'TVBoxOS'
+        type: string
+      branch_name:
+        description: '分支名'
+        required: true
+        default: 'main'
+        type: string
+      build_types:
+        description: '构建类型'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mobile
+          - tv
+      architectures:
+        description: '架构类型'
+        required: true
+        default: 'universal'
+        type: choice
+        options:
+          - universal
+          - arm64
+          - arm7
+
+  schedule:
+    - cron: '0 13 1 * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: ['mobile', 'tv']
+        architecture: ['universal', 'arm64', 'arm7']
+      max-parallel: 4
+    
+    steps:
+      - name: Checkout Workflow Code
+        uses: actions/checkout@v4
+        
+      - name: Display Build Configuration
+        run: |
+          echo "🎯 构建配置:"
+          echo "类型: ${{ matrix.build_type }}"
+          echo "架构: ${{ matrix.architecture }}"
+          
+      - name: Clone Source Code
+        run: |
+          USER_NAME="${{ github.event.inputs.user_name || 'q215613905' }}"
+          REPO_NAME="${{ github.event.inputs.repo_name || 'TVBoxOS' }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name || 'main' }}"
+          
+          echo "📥 克隆仓库: $USER_NAME/$REPO_NAME:$BRANCH_NAME"
+          git clone https://github.com/$USER_NAME/$REPO_NAME.git TVBoxOSC
+          cd TVBoxOSC
+          git checkout $BRANCH_NAME
+          
+          # 获取提交信息
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format="%cd" --date=format:"%Y%m%d-%H%M")
+          
+          echo "commit=$COMMIT_HASH" >> $GITHUB_ENV
+          echo "commit_date=$COMMIT_DATE" >> $GITHUB_ENV
+          echo "tag=TVBox-${COMMIT_DATE}" >> $GITHUB_ENV
+          
+      - name: Setup Build Environment
+        working-directory: TVBoxOSC
+        run: |
+          echo "🔧 设置构建环境..."
+          
+          # 安装必要工具
+          apt-get update && apt-get install -y curl unzip zip
+          
+          # 创建必要的配置文件
+          cat > local.properties << 'EOF'
+sdk.dir=/usr/local/lib/android/sdk
+EOF
+          
+          # 配置 gradle.properties
+          cat > gradle.properties << 'EOF'
+org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.daemon=true
+org.gradle.caching=true
+android.enableBuildCache=true
+EOF
+          
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Setup Python for Chaquopy
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Configure Chaquopy
+        working-directory: TVBoxOSC
+        run: |
+          echo "🐍 配置 Chaquopy..."
+          
+          PYTHON_PATH=$(which python3)
+          echo "Python 路径: $PYTHON_PATH"
+          
+          # 添加到 gradle.properties
+          echo "" >> gradle.properties
+          echo "# Chaquopy 配置" >> gradle.properties
+          echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
+          echo "chaquopy.pip=install" >> gradle.properties
+          
+          # 修复 Windows 路径
+          find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/.*python.exe|$PYTHON_PATH|gi" {} \;
+          
+          # 安装 Python 依赖
+          python3 -m pip install --upgrade pip
+          if [ -f "pyramid/requirements.txt" ]; then
+            python3 -m pip install -r pyramid/requirements.txt
+          fi
+          
+      - name: Modify Version Info
+        working-directory: TVBoxOSC
+        run: |
+          echo "⚙️ 修改版本信息..."
+          
+          BUILD_TYPE="${{ matrix.build_type }}"
+          ARCH="${{ matrix.architecture }}"
+          TAG="${{ env.tag }}"
+          
+          if [ -f "app/build.gradle" ]; then
+            sed -i "/versionName/s/versionName .*/versionName \"${TAG}-${BUILD_TYPE}-${ARCH}\"/" app/build.gradle
+            echo "✅ 版本名称修改为: ${TAG}-${BUILD_TYPE}-${ARCH}"
+          fi
+          
+      - name: Configure Architecture Filters
+        working-directory: TVBoxOSC
+        run: |
+          echo "🏗️ 配置架构过滤器..."
+          
+          ARCH="${{ matrix.architecture }}"
+          
+          if [ "$ARCH" = "arm64" ]; then
+            echo "设置 ARM64 架构过滤器..."
+            if [ -f "app/build.gradle" ]; then
+              sed -i '/defaultConfig {/a\
+        ndk {\
+            abiFilters "arm64-v8a"\
+        }' app/build.gradle
+            fi
+          elif [ "$ARCH" = "arm7" ]; then
+            echo "设置 ARM7 架构过滤器..."
+            if [ -f "app/build.gradle" ]; then
+              sed -i '/defaultConfig {/a\
+        ndk {\
+            abiFilters "armeabi-v7a"\
+        }' app/build.gradle
+            fi
+          else
+            echo "构建所有架构（无过滤器）"
+          fi
+          
+      - name: Configure Build Variant
+        working-directory: TVBoxOSC
+        run: |
+          echo "🔧 配置构建变体..."
+          
+          BUILD_TYPE="${{ matrix.build_type }}"
+          
+          # 设置构建命令
+          if [ "$BUILD_TYPE" = "tv" ]; then
+            echo "BUILD_VARIANT=TvRelease" >> $GITHUB_ENV
+          else
+            echo "BUILD_VARIANT=Release" >> $GITHUB_ENV
+          fi
+          
+      - name: Configure Signing
+        working-directory: TVBoxOSC
+        run: |
+          echo "🔐 配置签名..."
+          
+          if [ -f "${{ github.workspace }}/.github/workflows/TVBoxOSC.jks" ]; then
+            cp "${{ github.workspace }}/.github/workflows/TVBoxOSC.jks" app/
+            
+            cat >> gradle.properties << 'EOF'
+RELEASE_STORE_FILE=./TVBoxOSC.jks
+RELEASE_KEY_ALIAS=TVBoxOSC
+RELEASE_STORE_PASSWORD=TVBoxOSC
+RELEASE_KEY_PASSWORD=TVBoxOSC
+EOF
+          fi
+          
+      - name: Prepare Gradle Wrapper
+        working-directory: TVBoxOSC
+        run: |
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
+          fi
+          
+      - name: Build APK
+        working-directory: TVBoxOSC
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          echo "🏗️ 开始构建..."
+          
+          ./gradlew :app:assemble${{ env.BUILD_VARIANT }} \
+            --build-cache \
+            --parallel \
+            --stacktrace
+          
+      - name: Collect Artifacts
+        working-directory: TVBoxOSC
+        run: |
+          echo "📦 收集构建产物..."
+          
+          BUILD_TYPE="${{ matrix.build_type }}"
+          ARCH="${{ matrix.architecture }}"
+          TAG="${{ env.tag }}"
+          
+          mkdir -p output
+          
+          # 查找 APK 文件
+          APK_DIR="app/build/outputs/apk/${{ env.BUILD_VARIANT | lower }}"
+          
+          if [ -d "$APK_DIR" ]; then
+            case "$ARCH" in
+              "universal")
+                APK_FILE=$(find "$APK_DIR" -name "*universal*.apk" | head -1)
+                if [ -n "$APK_FILE" ]; then
+                  cp "$APK_FILE" "output/TVBox-${BUILD_TYPE}-universal-${TAG}.apk"
+                fi
+                ;;
+              "arm64")
+                APK_FILE=$(find "$APK_DIR" -name "*arm64*.apk" | head -1)
+                if [ -n "$APK_FILE" ]; then
+                  cp "$APK_FILE" "output/TVBox-${BUILD_TYPE}-arm64-${TAG}.apk"
+                fi
+                ;;
+              "arm7")
+                APK_FILE=$(find "$APK_DIR" -name "*armeabi*.apk" | head -1)
+                if [ -n "$APK_FILE" ]; then
+                  cp "$APK_FILE" "output/TVBox-${BUILD_TYPE}-arm7-${TAG}.apk"
+                fi
+                ;;
+            esac
+          fi
+          
+          # 显示文件
+          ls -la output/
+          
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}-${{ env.tag }}
+          path: TVBoxOSC/output/*
+          retention-days: 30
+          
+  combine:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Create Combined Package
+        run: |
+          mkdir -p combined
+          
+          # 复制所有 APK
+          find artifacts -name "*.apk" -type f -exec cp {} combined/ \;
+          
+          # 创建 ZIP
+          cd combined
+          zip -r "../TVBox-All-${{ needs.build.outputs.tag || 'latest' }}.zip" .
+          
+      - name: Upload Combined
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBox-Complete-Package
+          path: |
+            TVBox-All-${{ needs.build.outputs.tag || 'latest' }}.zip
+            combined/
