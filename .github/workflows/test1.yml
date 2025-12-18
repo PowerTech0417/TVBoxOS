@@ -100,15 +100,8 @@ jobs:
       - name: Checkout Workflow Code
         uses: actions/checkout@v4
         
-      - name: Display Configuration
-        run: |
-          echo "🏗️ Configuration de la compilation:"
-          echo "Type: ${{ matrix.build_type }}"
-          echo "Architecture: ${{ matrix.architecture }}"
-          
       - name: Clone Source Code
         run: |
-          # 修复了这里的表达式括号错误
           USER_NAME="${{ github.event.inputs.user_name || 'q215613905' }}"
           REPO_NAME="${{ github.event.inputs.repo_name || 'TVBoxOS' }}"
           BRANCH_NAME="${{ github.event.inputs.branch_name || 'main' }}"
@@ -127,7 +120,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
           
-      - name: Configure ABI Filters (Fix)
+      - name: Configure ABI Filters
         working-directory: TVBoxOSC
         run: |
           echo "🔧 Configuration des filtres d'architecture..."
@@ -135,12 +128,11 @@ jobs:
           CLEAN_ABI=$(echo $ABI_LIST | tr -d '[]" ')
           
           if [ -f "app/build.gradle" ]; then
-            # 删除原有的硬编码
+            # 清除旧的 ABI 限制
             sed -i '/abiFilters/d' app/build.gradle
             
-            # 注入新的配置
             if [ "$CLEAN_ABI" != "" ]; then
-               # 将逗号分隔转换为 gradle 格式: "arm64-v8a","armeabi-v7a"
+               # 修复：使用更稳健的 sed 命令插入，不使用反斜杠换行
                FORMATTED_ABI=$(echo $CLEAN_ABI | sed 's/,/","/g')
                sed -i "/defaultConfig {/a \        ndk { abiFilters \"$FORMATTED_ABI\" }" app/build.gradle
                echo "✅ Filtres appliqués: $CLEAN_ABI"
@@ -158,8 +150,9 @@ jobs:
         run: |
           mkdir -p output/release
           TAG="${{ env.tag }}"
-          # 改进了查找逻辑，确保能找到 APK
+          # 寻找生成的 APK 并重命名
           find app/build/outputs/apk/ -name "*.apk" -type f | while read file; do
+            NAME=$(basename "$file")
             NEW_NAME="TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}-${TAG}.apk"
             cp "$file" "output/release/$NEW_NAME"
             echo "📦 APK Traité: $NEW_NAME"
