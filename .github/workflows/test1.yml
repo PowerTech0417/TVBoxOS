@@ -93,17 +93,24 @@ jobs:
       - name: Configure ABI
         working-directory: TVBoxOSC
         run: |
-          echo "🔧 Configuration des filtres ABI..."
-          CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
+          # 修复 Line 84 附近的语法错误：使用环境变量和简单的替换逻辑
           if [ -f "app/build.gradle" ]; then
+            # 删除旧的 abiFilters 限制
             sed -i '/abiFilters/d' app/build.gradle
+            
+            # 获取并格式化 ABI 列表
+            CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
+            
             if [ -n "$CLEAN_ABI" ]; then
+              # 将逗号转为符合 Gradle 语法的 "abi1","abi2"
               FORMATTED=$(echo $CLEAN_ABI | sed 's/,/","/g')
-              sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$FORMATTED\" }/g" app/build.gradle
+              # 使用 @ 符号作为 sed 分隔符更安全，且移除换行符尝试，改为单行注入
+              sed -i "s@defaultConfig {@defaultConfig { ndk { abiFilters \"$FORMATTED\" }@g" app/build.gradle
+              echo "✅ ABI Filtres configurés: $FORMATTED"
             fi
           fi
 
-      - name: Build
+      - name: Build APK
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
@@ -115,7 +122,7 @@ jobs:
           mkdir -p output
           find app/build/outputs/apk/ -name "*.apk" -type f -exec cp {} output/ \;
 
-      - name: Upload
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}
@@ -126,16 +133,16 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Download
+      - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: all-apks
-      - name: Package
+      - name: Package Final Release
         run: |
           mkdir -p final
           find all-apks -name "*.apk" -exec cp {} final/ \;
       - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-Complete-Pack
+          name: TVBox-Complete-Pack-${{ env.GLOBAL_TAG }}
           path: final/*.apk
