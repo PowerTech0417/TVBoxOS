@@ -93,20 +93,12 @@ jobs:
       - name: Configure ABI
         working-directory: TVBoxOSC
         run: |
-          # 修复 Line 84 附近的语法错误：使用环境变量和简单的替换逻辑
           if [ -f "app/build.gradle" ]; then
-            # 删除旧的 abiFilters 限制
             sed -i '/abiFilters/d' app/build.gradle
-            
-            # 获取并格式化 ABI 列表
             CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
-            
             if [ -n "$CLEAN_ABI" ]; then
-              # 将逗号转为符合 Gradle 语法的 "abi1","abi2"
               FORMATTED=$(echo $CLEAN_ABI | sed 's/,/","/g')
-              # 使用 @ 符号作为 sed 分隔符更安全，且移除换行符尝试，改为单行注入
               sed -i "s@defaultConfig {@defaultConfig { ndk { abiFilters \"$FORMATTED\" }@g" app/build.gradle
-              echo "✅ ABI Filtres configurés: $FORMATTED"
             fi
           fi
 
@@ -144,5 +136,5 @@ jobs:
       - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-Complete-Pack-${{ env.GLOBAL_TAG }}
+          name: TVBox-Combined-Pack
           path: final/*.apk
