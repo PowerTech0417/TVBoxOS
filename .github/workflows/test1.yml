@@ -1,4 +1,4 @@
-name: TVBox Multi-Build (Universal Optimized)
+name: TVBox Multi-Build
 
 on:
   workflow_dispatch:
@@ -36,21 +36,15 @@ on:
           - universal
           - arm64
           - arm7
-          - separate
 
-  schedule:
-    - cron: '0 13 1 * *'
-
-# 全局环境变量，确保所有 Job 都能访问
 env:
-  GLOBAL_TAG: "TVBox-${{ github.event.inputs.branch_name || 'main' }}-${{ github.run_id }}"
+  GLOBAL_TAG: "TVBox-${{ github.run_number }}"
 
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-    
     steps:
       - name: Generate Build Matrix
         id: set-matrix
@@ -58,35 +52,14 @@ jobs:
           BUILD_TYPES="${{ github.event.inputs.build_types || 'all' }}"
           ARCHS="${{ github.event.inputs.architectures || 'universal' }}"
           MATRIX_ENTRIES="["
-          
-          if [ "$BUILD_TYPES" = "all" ]; then
-            TYPES=("mobile" "tv")
-          else
-            TYPES=("$BUILD_TYPES")
-          fi
-          
-          if [ "$ARCHS" = "universal" ]; then
-            ARCH_LIST=("universal")
-          elif [ "$ARCHS" = "separate" ]; then
-            ARCH_LIST=("arm64" "arm7")
-          else
-            ARCH_LIST=("$ARCHS")
-          fi
-          
+          if [ "$BUILD_TYPES" = "all" ]; then TYPES=("mobile" "tv"); else TYPES=("$BUILD_TYPES"); fi
+          if [ "$ARCHS" = "universal" ]; then ARCH_LIST=("universal"); else ARCH_LIST=("$ARCHS"); fi
           FIRST=true
           for TYPE in "${TYPES[@]}"; do
             for ARCH in "${ARCH_LIST[@]}"; do
-              VARIANT="Release"
-              if [[ "$ARCH" == "arm64" ]]; then
-                ABI_FILTERS='["arm64-v8a"]'
-              elif [[ "$ARCH" == "arm7" ]]; then
-                ABI_FILTERS='["armeabi-v7a"]'
-              else
-                ABI_FILTERS='["arm64-v8a","armeabi-v7a"]'
-              fi
-              
+              if [[ "$ARCH" == "arm64" ]]; then ABI='["arm64-v8a"]'; elif [[ "$ARCH" == "arm7" ]]; then ABI='["armeabi-v7a"]'; else ABI='["arm64-v8a","armeabi-v7a"]'; fi
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX_ENTRIES="$MATRIX_ENTRIES,"; fi
-              MATRIX_ENTRIES="$MATRIX_ENTRIES{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"variant\":\"$VARIANT\",\"abi_filters\":$ABI_FILTERS}"
+              MATRIX_ENTRIES="$MATRIX_ENTRIES{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"abi_filters\":$ABI}"
             done
           done
           MATRIX_ENTRIES="$MATRIX_ENTRIES]"
@@ -98,80 +71,71 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
       max-parallel: 4
-    
     steps:
-      - name: Checkout Workflow Code
+      - name: Checkout Code
         uses: actions/checkout@v4
-        
-      - name: Clone Source Code
+
+      - name: Clone Source
         run: |
           git clone https://github.com/${{ github.event.inputs.user_name }}/${{ github.event.inputs.repo_name }}.git TVBoxOSC
           cd TVBoxOSC
           git checkout ${{ github.event.inputs.branch_name }}
-          
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-          
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-          
-      - name: Configure ABI Filters
+
+      - name: Configure ABI
         working-directory: TVBoxOSC
         run: |
-          echo "🔧 Configuration des filtres..."
-          ABI_LIST='${{ toJson(matrix.abi_filters) }}'
-          CLEAN_ABI=$(echo $ABI_LIST | tr -d '[]" ')
-          
+          echo "🔧 Configuration des filtres ABI..."
+          CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
           if [ -f "app/build.gradle" ]; then
             sed -i '/abiFilters/d' app/build.gradle
             if [ -n "$CLEAN_ABI" ]; then
-               FORMATTED_ABI=$(echo $CLEAN_ABI | sed 's/,/","/g')
-               sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$FORMATTED_ABI\" }/g" app/build.gradle
-               echo "✅ Filtres appliqués: $CLEAN_ABI"
+              FORMATTED=$(echo $CLEAN_ABI | sed 's/,/","/g')
+              sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$FORMATTED\" }/g" app/build.gradle
             fi
           fi
 
-      - name: Build APK
+      - name: Build
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --stacktrace --parallel
-          
-      - name: Process APK Files
+
+      - name: Save APK
         working-directory: TVBoxOSC
         run: |
-          mkdir -p output/release
-          TAG="${{ env.GLOBAL_TAG }}"
-          find app/build/outputs/apk/ -name "*.apk" -type f | while read file; do
-            NEW_NAME="TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}-${TAG}.apk"
-            cp "$file" "output/release/$NEW_NAME"
-          done
-          
-      - name: Upload Artifacts
+          mkdir -p output
+          find app/build/outputs/apk/ -name "*.apk" -type f -exec cp {} output/ \;
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}
-          path: TVBoxOSC/output/release/*.apk
+          path: TVBoxOSC/output/*.apk
 
-  combine-artifacts:
+  combine:
     needs: build
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Download All Artifacts
+      - name: Download
         uses: actions/download-artifact@v4
         with:
           path: all-apks
-      - name: Finalize
+      - name: Package
         run: |
-          mkdir -p final-release
-          find all-apks -name "*.apk" -exec cp {} final-release/ \;
-          echo "✅ Fichiers regroupés avec succès."
-      - name: Upload Final Bundle
+          mkdir -p final
+          find all-apks -name "*.apk" -exec cp {} final/ \;
+      - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.GLOBAL_TAG }}-Complete
-          path: final-release/
+          name: TVBox-Complete-Pack
+          path: final/*.apk
