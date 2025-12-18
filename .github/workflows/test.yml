@@ -1,326 +1,86 @@
-name: Test
+name: TVBox Build
 
 on:
-  schedule:
-    - cron: 0 13 1 * *
+  # 手动触发
   workflow_dispatch:
     inputs:
-      rebuild:
-        description: '忽略构建记录以重新构建'
-        required: false
-        default: false
-        type: boolean
-      donotpublish:
-        description: '构建后不提交发布新版'
-        required: false
-        default: false
-        type: boolean
-      target_user:
-        description: '要构建的用户名（留空使用默认矩阵）'
-        required: false
-        default: ''
+      user_name:
+        description: 'GitHub用户名'
+        required: true
+        default: 'q215613905'
         type: string
-      target_repo:
-        description: '要构建的仓库名（留空使用默认矩阵）'
-        required: false
-        default: ''
+      repo_name:
+        description: '仓库名'
+        required: true
+        default: 'TVBoxOS'
         type: string
-      target_branch:
-        description: '要构建的分支（留空使用默认矩阵）'
-        required: false
-        default: ''
-        type: string
-      java_version:
-        description: 'Java版本（留空使用默认）'
-        required: false
-        default: ''
+      branch_name:
+        description: '分支名'
+        required: true
+        default: 'main'
         type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ${{ github.event_name == 'workflow_dispatch' && 'include' }}:
-          - userName: ${{ github.event.inputs.target_user || 'q215613905' }}
-            repoName: ${{ github.event.inputs.target_repo || 'TVBoxOS' }}
-            branchName: ${{ github.event.inputs.target_branch || 'main' }}
-            java_ver: ${{ github.event.inputs.java_version || '17' }}
-        ${{ github.event_name != 'workflow_dispatch' && 'include' }}:
-          - userName: q215613905
-            repoName: TVBoxOS
-            branchName: main
+    
     steps:
-      - name: Checkout
+      - name: Checkout Workflow Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Install Basic Tools
+        
+      - name: Display Inputs
         run: |
-          # 安装基本的命令行工具
-          apt-get update
-          apt-get install -y curl git sed grep coreutils findutils
-          echo "基本工具安装完成"
-      
-      - name: Check New Commit
+          echo "User: ${{ github.event.inputs.user_name }}"
+          echo "Repo: ${{ github.event.inputs.repo_name }}"
+          echo "Branch: ${{ github.event.inputs.branch_name }}"
+          
+      - name: Clone Source Code
         run: |
-          upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
-          echo "upStream=$upStream" >> $GITHUB_ENV
-          commit=$(curl -sL $upStream/commits/${{ matrix.branchName }} |grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" |head -1 | cut -d\/ -f5)
-          if [[ -z "${commit}" ]]; then
-            commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha' )
-          fi
-          if ! grep -q "$commit" README.md || [ "${{ github.event.inputs.rebuild || 'false' }}" == "true" ]; then
-            echo "commit=$commit" >> $GITHUB_ENV
-            echo "commitS=${commit:0:7}" >> $GITHUB_ENV
-          fi
-          echo "commit=$commit"
-      
-      - name: Checkout Source Code
-        if: ${{ env.commit }}
-        run: |
-          git clone ${{ env.upStream }} TVBoxOSC
+          git clone https://github.com/${{ github.event.inputs.user_name }}/${{ github.event.inputs.repo_name }}.git TVBoxOSC
           cd TVBoxOSC
-          git checkout ${{ env.commit }}
-          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
-      
-      # 第一步：设置 Python 环境（Chaquopy 需要）
-      - name: Setup Python
-        if: ${{ env.commit }}
-        uses: actions/setup-python@v5
+          git checkout ${{ github.event.inputs.branch_name }}
+          
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          python-version: '3.9'  # 使用兼容性较好的 Python 版本
-      
-      # 第二步：设置 Android SDK
+          distribution: 'temurin'
+          java-version: '17'
+          
       - name: Setup Android SDK
-        if: ${{ env.commit }}
         uses: android-actions/setup-android@v3
-      
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
       - name: Prepare Build Environment
-        if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          echo "=== 准备构建环境 ==="
+          # 创建必要的配置文件
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
           
-          # 1. 创建必要的文件
-          if [ ! -f "local.properties" ]; then
-            cat > local.properties << 'EOF'
-sdk.dir=/usr/local/lib/android/sdk
-EOF
-          fi
-          
-          if [ ! -f "gradle.properties" ]; then
-            cat > gradle.properties << 'EOF'
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-org.gradle.parallel=true
-org.gradle.daemon=true
-EOF
-          fi
-          
-          # 2. 获取 Python 路径并配置 Chaquopy
+          # 配置 Chaquopy Python 路径
           PYTHON_PATH=$(which python3)
-          echo "Python 路径: $PYTHON_PATH"
+          echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
+          echo "chaquopy.pip=install" >> gradle.properties
           
-          # 添加 Chaquopy 配置到 gradle.properties
-          cat >> gradle.properties << EOF
-
-# Chaquopy Python 配置
-chaquopy.python=$PYTHON_PATH
-chaquopy.pip=install
-EOF
+          # 修复 Windows Python 路径
+          find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" {} \;
           
-          # 3. 修复可能的 Windows Python 路径
-          if [ -d "pyramid" ]; then
-            echo "修复 pyramid 模块中的 Python 路径..."
-            find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" {} \;
-            find . -name "*.gradle" -type f -exec sed -i "s|C:/.*python.exe|$PYTHON_PATH|g" {} \;
-          fi
-          
-          # 4. 修复 gradlew 文件
+          # 修复 gradlew
           if [ -f "gradlew" ]; then
-            echo "修复 gradlew shebang..."
-            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
             chmod +x gradlew
+            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
           fi
           
-          echo "环境准备完成"
-      
-      - name: Extra Modify
-        if: ${{ env.commit }}
+      - name: Build with Gradle
         working-directory: TVBoxOSC
         run: |
-          echo '修改VersionName'
-          if [ "${{ matrix.userName }}" == "takagen99" ]; then
-            # 进行 sed 修改
-            sed -i 's/\.concat(buildTime())/ +\"${{ env.tag }}\"/g' app/build.gradle 
-            # 目前关于页面没有合并我的分支
-            sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
-          else
-             sed -i "/versionName/s#[0-9a-zA-Z_\.\'\"-]\+\$#\'${{ env.tag }}\'#" app/build.gradle
-             sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
-          fi 
-          echo 'crosswalk源，防挂'
-          if grep -q 'crosswalk' build.gradle; then
-            sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
-          else
-            sed -i "/jitpack.io/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
-          fi
-      
-      - name: Configure Chaquopy
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          # 安装 Python 依赖
-          python3 -m pip install --upgrade pip setuptools wheel
+          ./gradlew clean assemblerelease --stacktrace
           
-          # 如果有 requirements.txt，安装依赖
-          if [ -f "pyramid/requirements.txt" ]; then
-            echo "安装 Python 依赖..."
-            python3 -m pip install -r pyramid/requirements.txt
-          fi
-      
-      - name: Add Signing Configuration
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          # 复制签名文件
-          cp -f ${{ github.workspace }}/.github/workflows/TVBoxOSC.jks app/TVBoxOSC.jks
-          
-          # 添加签名配置到 gradle.properties
-          cat >> gradle.properties << 'EOF'
-
-# 签名配置
-RELEASE_STORE_FILE=./TVBoxOSC.jks
-RELEASE_KEY_ALIAS=TVBoxOSC
-RELEASE_STORE_PASSWORD=TVBoxOSC
-RELEASE_KEY_PASSWORD=TVBoxOSC
-EOF
-          
-          # 添加签名配置到 build.gradle
-          if [ -f "app/build.gradle" ]; then
-            # 在 android { 块前添加 signingConfigs
-            sed -i '/android {/i\
-signingConfigs {\
-    myConfig {\
-        storeFile file(RELEASE_STORE_FILE)\
-        storePassword RELEASE_STORE_PASSWORD\
-        keyAlias RELEASE_KEY_ALIAS\
-        keyPassword RELEASE_KEY_PASSWORD\
-        v1SigningEnabled true\
-        v2SigningEnabled true\
-        enableV3Signing = true\
-        enableV4Signing = true\
-    }\
-}\
-' app/build.gradle
-            
-            # 在 buildTypes 中添加签名配置
-            sed -i '/buildTypes {/a\
-        debug {\
-            signingConfig signingConfigs.myConfig\
-        }\
-        release {\
-            signingConfig signingConfigs.myConfig\
-            minifyEnabled false\
-            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\
-        }' app/build.gradle
-          fi
-      
-      - uses: actions/setup-java@v4
-        if: ${{ matrix.java_ver }}
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java_ver }}
-      
-      - uses: gradle/actions/setup-gradle@v4
-        if: ${{ env.commit }}
-      
-      - name: Build With Gradle
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-        run: |
-          echo "=== 开始构建 ==="
-          
-          # 清理并构建
-          ./gradlew clean assemblerelease \
-            --build-cache \
-            --parallel \
-            --stacktrace
-      
-      - name: Prepare App Artifacts
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          # 创建输出目录
-          mkdir -p apk
-          
-          # 查找并复制 APK 文件
-          find . -name "*.apk" -type f | while read apk_file; do
-            filename=$(basename "$apk_file")
-            # 重命名 APK
-            new_name="TVBox_${{ matrix.userName }}_${{ env.tag }}.apk"
-            cp "$apk_file" "apk/$new_name"
-          done
-          
-          # 如果没找到 APK，尝试默认位置
-          if [ ! "$(ls -A apk/*.apk 2>/dev/null)" ]; then
-            echo "在默认位置查找 APK..."
-            if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-              cp "app/build/outputs/apk/release/app-release.apk" "apk/TVBox_${{ matrix.userName }}_${{ env.tag }}.apk"
-            fi
-          fi
-          
-          # 压缩源码
-          tar -czf "apk/sourceCode-${{ env.commitS }}.tar.gz" --exclude=.git --exclude=.github .
-      
-      - name: Create Release Notes
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          lastCommit=$(grep "${{ matrix.userName }}\/${{ matrix.repoName }}" ${{ github.workspace }}/README.md | grep -o '[a-z0-9]\{40\}' | head -1)
-          
-          cat > "apk/${{ matrix.userName }}-Release.log" << EOF
-Credit: [${{ matrix.userName }}](${{ env.upStream }})
-Commit: ${{ env.commit }}
-Build Date: $(date +"%Y-%m-%d %H:%M:%S")
-Changelog:
-\`\`\`
-EOF
-          
-          if [ "${{ env.commit }}" = "${lastCommit}" ]; then
-            git log --pretty=format:%B ${{ env.commitS }} -1 | sed -e "s#  *#\n#g" -e "/^Merge/d" -e '/^$/d' >> "apk/${{ matrix.userName }}-Release.log"
-          else
-            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} | sed -e "s#  *#\n#g" -e "/^Merge/d" -e '/^$/d' >> "apk/${{ matrix.userName }}-Release.log"
-          fi
-          
-          echo '```' >> "apk/${{ matrix.userName }}-Release.log"
-      
-      - name: Upload App To Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
-        if: ${{ env.commit }}
         with:
-          name: ${{ matrix.userName }}-${{ matrix.repoName }}
-          path: |
-            TVBoxOSC/apk/*
-      
-      - name: Whether Or Not to Publish
-        if: ${{ github.event.inputs.donotpublish && env.commit }}
-        run: |
-          echo "commit=" >> $GITHUB_ENV
-  
-  clean:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete older workflow runs and artifacts
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 14
-          keep_minimum_runs: 10
+          name: TVBox-APK
+          path: TVBoxOSC/app/build/outputs/apk/**/*.apk
