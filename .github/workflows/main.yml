@@ -82,32 +82,28 @@ jobs:
               # 设置变体名称
               if [ "$TYPE" = "mobile" ]; then
                 VARIANT="Release"
-                if [[ "$ARCH" == "universal" ]]; then
-                  ABI_FILTERS='""'
-                elif [[ "$ARCH" == "arm64" ]]; then
-                  ABI_FILTERS='["arm64-v8a"]'
+                if [[ "$ARCH" == "arm64" ]]; then
+                  ABI_FILTERS="arm64"
                 elif [[ "$ARCH" == "arm7" ]]; then
-                  ABI_FILTERS='["armeabi-v7a"]'
+                  ABI_FILTERS="arm7"
                 else
-                  ABI_FILTERS='""'
+                  ABI_FILTERS="all"
                 fi
               elif [ "$TYPE" = "tv" ]; then
                 VARIANT="TvRelease"
-                if [[ "$ARCH" == "universal" ]]; then
-                  ABI_FILTERS='""'
-                elif [[ "$ARCH" == "arm64" ]]; then
-                  ABI_FILTERS='["arm64-v8a"]'
+                if [[ "$ARCH" == "arm64" ]]; then
+                  ABI_FILTERS="arm64"
                 elif [[ "$ARCH" == "arm7" ]]; then
-                  ABI_FILTERS='["armeabi-v7a"]'
+                  ABI_FILTERS="arm7"
                 else
-                  ABI_FILTERS='""'
+                  ABI_FILTERS="all"
                 fi
               elif [[ "$TYPE" == *"debug" ]]; then
                 VARIANT="Debug"
-                ABI_FILTERS='""'
+                ABI_FILTERS="all"
               else
                 VARIANT="Release"
-                ABI_FILTERS='""'
+                ABI_FILTERS="all"
               fi
               
               # 构建 JSON 条目
@@ -117,7 +113,7 @@ jobs:
                 MATRIX_ENTRIES="$MATRIX_ENTRIES,"
               fi
               
-              MATRIX_ENTRIES="$MATRIX_ENTRIES{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"variant\":\"$VARIANT\",\"abi_filters\":$ABI_FILTERS}"
+              MATRIX_ENTRIES="$MATRIX_ENTRIES{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"variant\":\"$VARIANT\",\"abi_filters\":\"$ABI_FILTERS\"}"
             done
           done
           
@@ -143,7 +139,7 @@ jobs:
           echo "类型: ${{ matrix.build_type }}"
           echo "架构: ${{ matrix.architecture }}"
           echo "变体: ${{ matrix.variant }}"
-          echo "ABI: ${{ matrix.abi_filters || 'all' }}"
+          echo "ABI 过滤器: ${{ matrix.abi_filters }}"
           
       - name: Clone Source Code
         run: |
@@ -172,7 +168,7 @@ jobs:
           echo "🔧 设置构建环境..."
           
           # 安装必要工具
-          apt-get update && apt-get install -y curl unzip zip jq
+          apt-get update && apt-get install -y curl unzip zip
           
           # 创建必要的配置文件
           cat > local.properties << 'EOF'
@@ -254,42 +250,56 @@ EOF
             sed -i "/android:text=/s/=\"[^\"]*\"/=\"${TAG}-${BUILD_TYPE}-${ARCH}\\n构建时间: $(date '+%Y-%m-%d %H:%M')\\n\\n\"/" app/src/main/res/layout/dialog_about.xml
           fi
           
+      # 修复的第179行开始
       - name: Configure ABI Filters
         working-directory: TVBoxOSC
         run: |
           echo "🏗️ 配置架构过滤器..."
           
-          # 获取 ABI 过滤器配置 - 这里修复了第179行的问题
-          ABI_CONFIG="${{ matrix.abi_filters }}"
+          # 获取架构信息
+          ARCH="${{ matrix.architecture }}"
+          ABI_FILTER="${{ matrix.abi_filters }}"
           
-          if [ "$ABI_CONFIG" != '""' ] && [ "$ABI_CONFIG" != "" ]; then
-            echo "设置 ABI 过滤器: $ABI_CONFIG"
+          echo "架构: $ARCH"
+          echo "ABI过滤器: $ABI_FILTER"
+          
+          # 根据架构配置过滤器
+          if [ "$ABI_FILTER" = "arm64" ]; then
+            echo "设置 ARM64 架构过滤器..."
             
             # 在 app/build.gradle 中添加 ndk 配置
             if [ -f "app/build.gradle" ]; then
               # 检查是否已经有 defaultConfig 块
               if grep -q "defaultConfig" app/build.gradle; then
-                # 根据配置设置过滤器
-                if [ "$ABI_CONFIG" = '["arm64-v8a"]' ]; then
-                  # 在 defaultConfig 中添加 ndk 配置
-                  sed -i '/defaultConfig {/a\
+                # 在 defaultConfig 中添加 ndk 配置
+                sed -i '/defaultConfig {/a\
         ndk {\
             abiFilters "arm64-v8a"\
         }' app/build.gradle
-                  echo "已设置 arm64-v8a 过滤器"
-                elif [ "$ABI_CONFIG" = '["armeabi-v7a"]' ]; then
-                  # 在 defaultConfig 中添加 ndk 配置
-                  sed -i '/defaultConfig {/a\
+                echo "✅ 已设置 arm64-v8a 过滤器"
+              fi
+            fi
+            
+          elif [ "$ABI_FILTER" = "arm7" ]; then
+            echo "设置 ARM7 架构过滤器..."
+            
+            # 在 app/build.gradle 中添加 ndk 配置
+            if [ -f "app/build.gradle" ]; then
+              # 检查是否已经有 defaultConfig 块
+              if grep -q "defaultConfig" app/build.gradle; then
+                # 在 defaultConfig 中添加 ndk 配置
+                sed -i '/defaultConfig {/a\
         ndk {\
             abiFilters "armeabi-v7a"\
         }' app/build.gradle
-                  echo "已设置 armeabi-v7a 过滤器"
-                fi
+                echo "✅ 已设置 armeabi-v7a 过滤器"
               fi
             fi
+            
           else
             echo "构建所有架构（无过滤器）"
           fi
+      # 修复的第179行结束
           
       - name: Configure Signing
         working-directory: TVBoxOSC
