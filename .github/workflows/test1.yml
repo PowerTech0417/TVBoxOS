@@ -1,148 +1,108 @@
-name: TVBox Multi-Build
+name: TVBox Multi-Build Optimized
 
 on:
   workflow_dispatch:
     inputs:
       user_name:
-        description: 'GitHub Username'
+        description: 'GitHub用户名'
         required: true
         default: 'q215613905'
         type: string
       repo_name:
-        description: 'Repository Name'
+        description: '仓库名'
         required: true
         default: 'TVBoxOS'
         type: string
       branch_name:
-        description: 'Branch Name'
+        description: '分支名'
         required: true
         default: 'main'
         type: string
-      build_types:
-        description: 'Build Type'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - mobile
-          - tv
       architectures:
-        description: 'Architecture'
+        description: '架构类型 (Architecture)'
         required: true
         default: 'universal'
         type: choice
         options:
           - universal
-          - arm64
-          - arm7
-
-env:
-  GLOBAL_TAG: "TVBox-${{ github.run_number }}"
+          - arm64-v8a
+          - armeabi-v7a
 
 jobs:
-  generate-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Generate Build Matrix
-        id: set-matrix
-        run: |
-          BUILD_TYPES="${{ github.event.inputs.build_types || 'all' }}"
-          ARCHS="${{ github.event.inputs.architectures || 'universal' }}"
-          MATRIX_ENTRIES="["
-          if [ "$BUILD_TYPES" = "all" ]; then TYPES=("mobile" "tv"); else TYPES=("$BUILD_TYPES"); fi
-          if [ "$ARCHS" = "universal" ]; then ARCH_LIST=("universal"); else ARCH_LIST=("$ARCHS"); fi
-          FIRST=true
-          for TYPE in "${TYPES[@]}"; do
-            for ARCH in "${ARCH_LIST[@]}"; do
-              if [[ "$ARCH" == "arm64" ]]; then ABI='["arm64-v8a"]'; elif [[ "$ARCH" == "arm7" ]]; then ABI='["armeabi-v7a"]'; else ABI='["arm64-v8a","armeabi-v7a"]'; fi
-              if [ "$FIRST" = true ]; then FIRST=false; else MATRIX_ENTRIES="$MATRIX_ENTRIES,"; fi
-              MATRIX_ENTRIES="$MATRIX_ENTRIES{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"abi_filters\":$ABI}"
-            done
-          done
-          MATRIX_ENTRIES="$MATRIX_ENTRIES]"
-          echo "matrix=$MATRIX_ENTRIES" >> $GITHUB_OUTPUT
-
   build:
-    needs: generate-matrix
     runs-on: ubuntu-latest
-    strategy:
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-      max-parallel: 4
+    
     steps:
-      - name: Checkout Code
+      - name: Checkout Workflow Code
         uses: actions/checkout@v4
-
-      - name: Clone Source
+        
+      - name: Clone Source Code
         run: |
+          echo "📥 Clonage du dépôt..."
           git clone https://github.com/${{ github.event.inputs.user_name }}/${{ github.event.inputs.repo_name }}.git TVBoxOSC
           cd TVBoxOSC
           git checkout ${{ github.event.inputs.branch_name }}
-
+          
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
+          
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Prepare Build Environment
+        working-directory: TVBoxOSC
+        run: |
+          echo "🔧 Configuration de l'environnement..."
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
+          
+          PYTHON_PATH=$(which python3)
+          echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
+          echo "chaquopy.pip=install" >> gradle.properties
+          
+          find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" {} \;
+          
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
+          fi
 
       - name: Configure ABI Filters
         working-directory: TVBoxOSC
         run: |
-          # 核心修复：避免在 sed 中使用 \n 或复杂的转义
+          echo "🏗️ Configuration des filtres ABI..."
+          ARCH_INPUT="${{ github.event.inputs.architectures }}"
+          
           if [ -f "app/build.gradle" ]; then
-            # 1. 彻底移除原有的 abiFilters 限制
+            # 清除原有的 abiFilters 限制
             sed -i '/abiFilters/d' app/build.gradle
             
-            # 2. 准备新的 ABI 字符串
-            CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
-            
-            if [ -n "$CLEAN_ABI" ]; then
-              # 格式化为 "abi1","abi2"
-              FORMATTED=$(echo $CLEAN_ABI | sed 's/,/","/g')
-              # 直接替换，不使用换行追加语法
-              sed -i "s/defaultConfig {/defaultConfig { ndk { abiFilters \"$FORMATTED\" }/g" app/build.gradle
-              echo "✅ ABI Filtres configurés : $FORMATTED"
+            if [ "$ARCH_INPUT" = "universal" ]; then
+              echo "✅ Version Universelle : support arm64-v8a et armeabi-v7a"
+              # 注入通用架构配置
+              sed -i 's/defaultConfig {/defaultConfig { \n        ndk { abiFilters "arm64-v8a", "armeabi-v7a" }/g' app/build.gradle
+            else
+              echo "✅ Version spécifique : $ARCH_INPUT"
+              # 注入单一架构配置
+              sed -i "s/defaultConfig {/defaultConfig { \n        ndk { abiFilters \"$ARCH_INPUT\" }/g" app/build.gradle
             fi
           fi
-
-      - name: Build APK
+          
+      - name: Build with Gradle
         working-directory: TVBoxOSC
         run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace --parallel
-
-      - name: Save APK
-        working-directory: TVBoxOSC
-        run: |
-          mkdir -p output/release
-          find app/build/outputs/apk/ -name "*.apk" -type f -exec cp {} output/release/ \;
-
-      - name: Upload Artifacts
+          echo "🚀 Lancement de la compilation..."
+          ./gradlew clean assembleRelease --stacktrace
+          
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}
-          path: TVBoxOSC/output/release/*.apk
-
-  combine:
-    needs: build
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: all-apks
-      - name: Package Final Release
-        run: |
-          mkdir -p final
-          find all-apks -name "*.apk" -exec cp {} final/ \;
-      - name: Final Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: TVBox-Complete-Pack
-          path: final/*.apk
+          name: TVBox-${{ github.event.inputs.architectures }}-${{ github.run_number }}
+          path: TVBoxOSC/app/build/outputs/apk/**/*.apk
