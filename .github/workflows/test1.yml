@@ -90,15 +90,23 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Configure ABI
+      - name: Configure ABI Filters
         working-directory: TVBoxOSC
         run: |
+          # 核心修复：避免在 sed 中使用 \n 或复杂的转义
           if [ -f "app/build.gradle" ]; then
+            # 1. 彻底移除原有的 abiFilters 限制
             sed -i '/abiFilters/d' app/build.gradle
+            
+            # 2. 准备新的 ABI 字符串
             CLEAN_ABI=$(echo '${{ toJson(matrix.abi_filters) }}' | tr -d '[]" ')
+            
             if [ -n "$CLEAN_ABI" ]; then
+              # 格式化为 "abi1","abi2"
               FORMATTED=$(echo $CLEAN_ABI | sed 's/,/","/g')
-              sed -i "s@defaultConfig {@defaultConfig { ndk { abiFilters \"$FORMATTED\" }@g" app/build.gradle
+              # 直接替换，不使用换行追加语法
+              sed -i "s/defaultConfig {/defaultConfig { ndk { abiFilters \"$FORMATTED\" }/g" app/build.gradle
+              echo "✅ ABI Filtres configurés : $FORMATTED"
             fi
           fi
 
@@ -111,14 +119,14 @@ jobs:
       - name: Save APK
         working-directory: TVBoxOSC
         run: |
-          mkdir -p output
-          find app/build/outputs/apk/ -name "*.apk" -type f -exec cp {} output/ \;
+          mkdir -p output/release
+          find app/build/outputs/apk/ -name "*.apk" -type f -exec cp {} output/release/ \;
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: TVBox-${{ matrix.build_type }}-${{ matrix.architecture }}
-          path: TVBoxOSC/output/*.apk
+          path: TVBoxOSC/output/release/*.apk
 
   combine:
     needs: build
@@ -136,5 +144,5 @@ jobs:
       - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-Combined-Pack
+          name: TVBox-Complete-Pack
           path: final/*.apk
