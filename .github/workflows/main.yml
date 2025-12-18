@@ -259,8 +259,8 @@ EOF
         run: |
           echo "🏗️ 配置架构过滤器..."
           
-          # 获取 ABI 过滤器配置
-          ABI_CONFIG='${{ matrix.abi_filters }}'
+          # 获取 ABI 过滤器配置 - 这里修复了第179行的问题
+          ABI_CONFIG="${{ matrix.abi_filters }}"
           
           if [ "$ABI_CONFIG" != '""' ] && [ "$ABI_CONFIG" != "" ]; then
             echo "设置 ABI 过滤器: $ABI_CONFIG"
