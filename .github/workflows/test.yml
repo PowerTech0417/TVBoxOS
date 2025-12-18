@@ -119,20 +119,37 @@ jobs:
           command -v python3 || echo "python3 未找到"
           command -v python || echo "python 未找到"
       
-      - name: Set Executable Permissions
+      - name: Fix Gradlew Shebang
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          # 确保 gradlew 有执行权限
+          echo "=== 修复 gradlew 文件 ==="
+          
+          # 检查 gradlew 文件
           if [ -f "gradlew" ]; then
+            echo "原始 gradlew 文件第一行:"
+            head -1 gradlew
+            
+            # 修复 shebang 行
+            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
+            
+            echo "修复后的 gradlew 文件第一行:"
+            head -1 gradlew
+            
+            # 确保文件有执行权限
             chmod +x gradlew
+            
+            # 显示文件权限
             ls -la gradlew
+          else
+            echo "未找到 gradlew 文件"
           fi
           
-          # 检查所有 gradle wrapper 文件
+          # 修复所有子目录中的 gradlew 文件
           find . -name "gradlew" -type f | while read file; do
+            echo "修复 $file"
+            sed -i '1s|.*|#!/usr/bin/env bash|' "$file"
             chmod +x "$file"
-            echo "设置执行权限: $file"
           done
       
       - name: Fix Chaquopy Python Path
@@ -335,8 +352,9 @@ jobs:
           python3 --version
           echo "Python 可执行文件路径:"
           python3 -c "import sys; print('Python executable:', sys.executable)"
-          echo "Gradle 版本:"
-          ./gradlew --version
+          
+          # 跳过 gradlew --version 检查，直接构建
+          echo "跳过 gradlew --version 检查，直接构建..."
           
           # 显示 Chaquopy 配置
           echo "=== Chaquopy 配置检查 ==="
@@ -346,22 +364,22 @@ jobs:
           
           if [ -d "pyramid" ] && [ -f "pyramid/build.gradle" ]; then
             echo "pyramid build.gradle 中的 Python 配置:"
-            grep -i "python" pyramid/build.gradle || echo "没有找到 Python 配置"
+            grep -i "python" pyramid/build.gradle | head -5 || echo "没有找到 Python 配置"
           fi
           
           # 清理之前的构建
-          ./gradlew clean
+          echo "=== 清理构建 ==="
+          bash gradlew clean
           
           # 尝试构建发布版本，使用详细的日志
           echo "=== 开始构建 ==="
-          ./gradlew assemblerelease \
+          bash gradlew assemblerelease \
             --build-cache \
             --parallel \
             --daemon \
             --warning-mode all \
             --stacktrace \
-            --info \
-            --no-daemon
+            --info
       
       - name: Prepare App
         if: ${{ env.commit }}
