@@ -113,46 +113,6 @@ jobs:
             echo "sdk.dir=/usr/local/lib/android/sdk" >> local.properties
           fi
           
-          # 检查是否有 pyramid 模块使用 Chaquopy
-          if [ -d "pyramid" ]; then
-            echo "检测到 pyramid 模块，配置 Chaquopy Python 路径..."
-            
-            # 查找 Python 可执行文件路径
-            PYTHON_PATH=$(command -v python3 || command -v python)
-            echo "Python 路径: $PYTHON_PATH"
-            
-            # 在 gradle.properties 中添加 Python 配置
-            if [ -f "gradle.properties" ]; then
-              # 移除已有的 chaquopy.python 配置
-              sed -i '/^chaquopy\.python=/d' gradle.properties
-            else
-              echo "# Project-wide Gradle settings." > gradle.properties
-            fi
-            
-            # 添加 Chaquopy Python 配置
-            echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
-            echo "chaquopy.pip=install" >> gradle.properties
-            
-            # 如果 pyramid 有自己的 gradle.properties，也更新它
-            if [ -f "pyramid/gradle.properties" ]; then
-              sed -i '/^chaquopy\.python=/d' pyramid/gradle.properties
-              echo "chaquopy.python=$PYTHON_PATH" >> pyramid/gradle.properties
-            fi
-            
-            # 创建 pyramid 的 local.properties
-            if [ ! -f "pyramid/local.properties" ]; then
-              cp local.properties pyramid/
-            fi
-          fi
-          
-          # 创建 gradle.properties 如果不存在
-          if [ ! -f "gradle.properties" ]; then
-            echo "# Project-wide Gradle settings." > gradle.properties
-            echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
-            echo "org.gradle.parallel=true" >> gradle.properties
-            echo "org.gradle.daemon=true" >> gradle.properties
-          fi
-          
           # 显示 Python 相关信息用于调试
           echo "=== Python 信息 ==="
           python3 --version || true
@@ -174,6 +134,76 @@ jobs:
             chmod +x "$file"
             echo "设置执行权限: $file"
           done
+      
+      - name: Fix Chaquopy Python Path
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          echo "=== 修复 Chaquopy Python 路径 ==="
+          
+          # 查找 Python 可执行文件路径
+          PYTHON_PATH=$(command -v python3 || command -v python)
+          echo "找到 Python 路径: $PYTHON_PATH"
+          
+          # 1. 在 gradle.properties 中设置 Chaquopy Python 路径
+          if [ -f "gradle.properties" ]; then
+            # 移除已有的 chaquopy.python 配置
+            sed -i '/^chaquopy\.python=/d' gradle.properties
+            echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
+            echo "chaquopy.pip=install" >> gradle.properties
+            echo "已在 gradle.properties 中设置 Python 路径"
+          fi
+          
+          # 2. 检查并修复 pyramid 子项目的配置
+          if [ -d "pyramid" ]; then
+            echo "检查 pyramid 模块配置..."
+            
+            # 修复 pyramid 的 gradle.properties
+            if [ -f "pyramid/gradle.properties" ]; then
+              sed -i '/^chaquopy\.python=/d' pyramid/gradle.properties
+              echo "chaquopy.python=$PYTHON_PATH" >> pyramid/gradle.properties
+              echo "已修复 pyramid/gradle.properties"
+            fi
+            
+            # 修复 pyramid 的 build.gradle
+            if [ -f "pyramid/build.gradle" ]; then
+              # 查找并替换 Windows 风格的 Python 路径
+              sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" pyramid/build.gradle
+              sed -i "s|D:\\\\Programs\\\\Python\\\\Python38\\\\python.exe|$PYTHON_PATH|g" pyramid/build.gradle
+              sed -i "s|C:/.*python.exe|$PYTHON_PATH|g" pyramid/build.gradle
+              sed -i "s|C:\\\\.*python.exe|$PYTHON_PATH|g" pyramid/build.gradle
+              echo "已修复 pyramid/build.gradle 中的 Python 路径"
+            fi
+            
+            # 创建 pyramid 的 local.properties
+            if [ ! -f "pyramid/local.properties" ] && [ -f "local.properties" ]; then
+              cp local.properties pyramid/
+            fi
+          fi
+          
+          # 3. 修复 app 的 build.gradle
+          if [ -f "app/build.gradle" ]; then
+            sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" app/build.gradle
+            sed -i "s|D:\\\\Programs\\\\Python\\\\Python38\\\\python.exe|$PYTHON_PATH|g" app/build.gradle
+            echo "已检查 app/build.gradle"
+          fi
+          
+          # 4. 修复根项目的 build.gradle
+          if [ -f "build.gradle" ]; then
+            sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" build.gradle
+            sed -i "s|D:\\\\Programs\\\\Python\\\\Python38\\\\python.exe|$PYTHON_PATH|g" build.gradle
+            echo "已检查 build.gradle"
+          fi
+          
+          # 5. 创建/更新全局 gradle.properties
+          if [ ! -f "gradle.properties" ]; then
+            echo "# Project-wide Gradle settings." > gradle.properties
+            echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+            echo "org.gradle.parallel=true" >> gradle.properties
+            echo "org.gradle.daemon=true" >> gradle.properties
+          fi
+          
+          echo "=== Chaquopy Python 路径修复完成 ==="
       
       - name: Extra Modify
         if: ${{ env.commit }}
@@ -202,7 +232,7 @@ jobs:
         working-directory: TVBoxOSC
         run: |
           # 检查是否有 Chaquopy 相关配置
-          if grep -r "chaquopy" . --include="*.gradle" --include="*.properties"; then
+          if grep -r "chaquopy" . --include="*.gradle" --include="*.properties" 2>/dev/null || [ -d "pyramid" ]; then
             echo "检测到 Chaquopy 配置，进行相应设置..."
             
             # 安装 pip 和可能的 Python 依赖
@@ -213,6 +243,15 @@ jobs:
               echo "安装 Python 依赖..."
               python3 -m pip install -r pyramid/requirements.txt
             fi
+            
+            # 安装一些常见的 Python 包，以防万一
+            echo "安装常见 Python 包..."
+            python3 -m pip install setuptools wheel
+            
+            # 检查 Python 版本和路径
+            echo "当前 Python 信息:"
+            python3 --version
+            python3 -c "import sys; print('Python executable:', sys.executable)"
           else
             echo "未检测到 Chaquopy 配置"
           fi
@@ -287,27 +326,42 @@ jobs:
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          # 设置 Python 环境变量
+          PATH: /opt/hostedtoolcache/Python/3.9.*/x64/bin:$PATH
         run: |
           # 显示环境信息用于调试
           echo "=== 环境信息 ==="
           echo "Python 版本:"
           python3 --version
           echo "Python 可执行文件路径:"
-          command -v python3 || echo "python3 未找到"
+          python3 -c "import sys; print('Python executable:', sys.executable)"
           echo "Gradle 版本:"
           ./gradlew --version
+          
+          # 显示 Chaquopy 配置
+          echo "=== Chaquopy 配置检查 ==="
+          if [ -f "gradle.properties" ]; then
+            grep -i "chaquopy" gradle.properties || echo "gradle.properties 中没有 chaquopy 配置"
+          fi
+          
+          if [ -d "pyramid" ] && [ -f "pyramid/build.gradle" ]; then
+            echo "pyramid build.gradle 中的 Python 配置:"
+            grep -i "python" pyramid/build.gradle || echo "没有找到 Python 配置"
+          fi
           
           # 清理之前的构建
           ./gradlew clean
           
-          # 构建发布版本
+          # 尝试构建发布版本，使用详细的日志
+          echo "=== 开始构建 ==="
           ./gradlew assemblerelease \
             --build-cache \
             --parallel \
             --daemon \
             --warning-mode all \
             --stacktrace \
-            --info
+            --info \
+            --no-daemon
       
       - name: Prepare App
         if: ${{ env.commit }}
