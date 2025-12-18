@@ -18,15 +18,6 @@ on:
         required: true
         default: 'main'
         type: string
-      architectures:
-        description: '架构类型'
-        required: true
-        default: 'universal'
-        type: choice
-        options:
-          - universal
-          - arm64-v8a
-          - armeabi-v7a
 
 jobs:
   build:
@@ -67,6 +58,7 @@ jobs:
           echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
           echo "chaquopy.pip=install" >> gradle.properties
           
+          # 修复 Python 路径
           find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" {} \;
           
           if [ -f "gradlew" ]; then
@@ -74,38 +66,37 @@ jobs:
             sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
           fi
 
-      - name: Configure ABI Filters
+      - name: Configure Universal Compatibility
         working-directory: TVBoxOSC
         run: |
-          echo "🏗️ Configuration des filtres ABI..."
-          ARCH_INPUT="${{ github.event.inputs.architectures }}"
+          echo "🏗️ Optimisation de la compatibilité TV & Mobile..."
           
           if [ -f "app/build.gradle" ]; then
-            # 删除旧的限制
+            # 1. 彻底删除原有的 abiFilters 限制（防止硬编码导致的闪退）
             sed -i '/abiFilters/d' app/build.gradle
             
-            # 根据选择准备配置内容
-            if [ "$ARCH_INPUT" = "universal" ]; then
-              NDK_CONF='ndk { abiFilters "arm64-v8a", "armeabi-v7a" }'
-            else
-              NDK_CONF="ndk { abiFilters '$ARCH_INPUT' }"
-            fi
+            # 2. 注入 Universal ABI 支持 (同时包含 32位 和 64位)
+            # 这是解决手机版闪退的关键，因为手机通常需要 arm64-v8a
+            NDK_CONF='ndk { abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64" }'
             
-            # 使用替换模式，完全不使用 \n 换行符，避免 YAML 语法错误
-            # 逻辑：在 defaultConfig { 后面直接插入 NDK 配置
+            # 3. 强制降低 minSdkVersion (确保旧电视盒兼容)
+            sed -i 's/minSdkVersion [0-9]*/minSdkVersion 19/g' app/build.gradle
+            
+            # 4. 在 defaultConfig 中注入配置
             sed -i "s/defaultConfig {/defaultConfig { $NDK_CONF /g" app/build.gradle
             
-            echo "✅ Configuré : $NDK_CONF"
+            echo "✅ Configuration de compatibilité terminée."
           fi
           
       - name: Build with Gradle
         working-directory: TVBoxOSC
         run: |
-          echo "🚀 Lancement de la compilation..."
+          echo "🚀 Lancement de la compilation universelle..."
+          # 使用 assembleRelease 构建所有变体
           ./gradlew clean assembleRelease --stacktrace
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox-${{ github.event.inputs.architectures }}-${{ github.run_number }}
+          name: TVBox-Universal-Compatibility
           path: TVBoxOSC/app/build/outputs/apk/**/*.apk
