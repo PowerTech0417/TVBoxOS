@@ -259,35 +259,36 @@ EOF
         run: |
           echo "🏗️ 配置架构过滤器..."
           
-          ABI_FILTERS='${{ matrix.abi_filters }}'
+          # 获取 ABI 过滤器配置
+          ABI_CONFIG='${{ matrix.abi_filters }}'
           
-          if [ "$ABI_FILTERS" != '""' ] && [ "$ABI_FILTERS" != "" ]; then
-            echo "设置 ABI 过滤器: $ABI_FILTERS"
+          if [ "$ABI_CONFIG" != '""' ] && [ "$ABI_CONFIG" != "" ]; then
+            echo "设置 ABI 过滤器: $ABI_CONFIG"
             
             # 在 app/build.gradle 中添加 ndk 配置
             if [ -f "app/build.gradle" ]; then
               # 检查是否已经有 defaultConfig 块
               if grep -q "defaultConfig" app/build.gradle; then
-                # 解析 ABI 过滤器
-                if [ "$ABI_FILTERS" = '["arm64-v8a"]' ]; then
-                  FILTER_STRING='abiFilters "arm64-v8a"'
-                elif [ "$ABI_FILTERS" = '["armeabi-v7a"]' ]; then
-                  FILTER_STRING='abiFilters "armeabi-v7a"'
-                else
-                  FILTER_STRING=''
-                fi
-                
-                if [ -n "$FILTER_STRING" ]; then
+                # 根据配置设置过滤器
+                if [ "$ABI_CONFIG" = '["arm64-v8a"]' ]; then
                   # 在 defaultConfig 中添加 ndk 配置
-                  sed -i "/defaultConfig {/a\
+                  sed -i '/defaultConfig {/a\
         ndk {\
-            $FILTER_STRING\
-        }" app/build.gradle
+            abiFilters "arm64-v8a"\
+        }' app/build.gradle
+                  echo "已设置 arm64-v8a 过滤器"
+                elif [ "$ABI_CONFIG" = '["armeabi-v7a"]' ]; then
+                  # 在 defaultConfig 中添加 ndk 配置
+                  sed -i '/defaultConfig {/a\
+        ndk {\
+            abiFilters "armeabi-v7a"\
+        }' app/build.gradle
+                  echo "已设置 armeabi-v7a 过滤器"
                 fi
               fi
             fi
           else
-            echo "构建所有架构"
+            echo "构建所有架构（无过滤器）"
           fi
           
       - name: Configure Signing
