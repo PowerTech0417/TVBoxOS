@@ -1,0 +1,131 @@
+# 这是完整的工作流文件，需要保存为 .github/workflows/tvbox-multi-build.yml
+name: TVBox Multi-Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_name:
+        description: 'GitHub用户名'
+        required: true
+        default: 'q215613905'
+        type: string
+      repo_name:
+        description: '仓库名'
+        required: true
+        default: 'TVBoxOS'
+        type: string
+      branch_name:
+        description: '分支名'
+        required: true
+        default: 'main'
+        type: string
+      build_types:
+        description: '构建类型'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mobile
+          - tv
+          - mobile_debug
+          - tv_debug
+      architectures:
+        description: '架构类型'
+        required: true
+        default: 'universal'
+        type: choice
+        options:
+          - universal
+          - arm64
+          - arm7
+          - separate
+
+  schedule:
+    - cron: '0 13 1 * *'
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    
+    steps:
+      - name: Generate Build Matrix
+        id: set-matrix
+        run: |
+          # 根据输入参数生成构建矩阵
+          BUILD_TYPES="${{ github.event.inputs.build_types || 'all' }}"
+          ARCHS="${{ github.event.inputs.architectures || 'universal' }}"
+          
+          MATRIX='[]'
+          
+          # 定义构建类型
+          if [ "$BUILD_TYPES" = "all" ]; then
+            TYPES=("mobile" "tv")
+          else
+            TYPES=("$BUILD_TYPES")
+          fi
+          
+          # 定义架构
+          if [ "$ARCHS" = "universal" ]; then
+            ARCH_LIST=("universal")
+          elif [ "$ARCHS" = "separate" ]; then
+            ARCH_LIST=("arm64" "arm7")
+          else
+            ARCH_LIST=("$ARCHS")
+          fi
+          
+          # 生成矩阵
+          for TYPE in "${TYPES[@]}"; do
+            for ARCH in "${ARCH_LIST[@]}"; do
+              # 设置变体名称
+              if [ "$TYPE" = "mobile" ]; then
+                VARIANT="Release"
+                if [[ "$ARCH" == "universal" ]]; then
+                  ABI_FILTERS=""
+                elif [[ "$ARCH" == "arm64" ]]; then
+                  ABI_FILTERS='"arm64-v8a"'
+                elif [[ "$ARCH" == "arm7" ]]; then
+                  ABI_FILTERS='"armeabi-v7a"'
+                fi
+              elif [ "$TYPE" = "tv" ]; then
+                VARIANT="TvRelease"
+                if [[ "$ARCH" == "universal" ]]; then
+                  ABI_FILTERS=""
+                elif [[ "$ARCH" == "arm64" ]]; then
+                  ABI_FILTERS='"arm64-v8a"'
+                elif [[ "$ARCH" == "arm7" ]]; then
+                  ABI_FILTERS='"armeabi-v7a"'
+                fi
+              elif [[ "$TYPE" == *"debug" ]]; then
+                VARIANT="Debug"
+                ABI_FILTERS=""
+              else
+                VARIANT="Release"
+                ABI_FILTERS=""
+              fi
+              
+              ENTRY="{\"build_type\":\"$TYPE\",\"architecture\":\"$ARCH\",\"variant\":\"$VARIANT\",\"abi_filters\":$ABI_FILTERS}"
+              
+              if [ -z "$MATRIX" ] || [ "$MATRIX" = "[]" ]; then
+                MATRIX="[$ENTRY]"
+              else
+                MATRIX=$(echo "$MATRIX" | jq ". += [$ENTRY]")
+              fi
+            done
+          done
+          
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $MATRIX"
+
+  build:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      max-parallel: 4
+    
+    steps:
+      # ... [上面的所有构建步骤保持不变]
+      # 注意：这里需要复制上面 build job 中的所有步骤
