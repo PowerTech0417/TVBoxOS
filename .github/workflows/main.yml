@@ -1,49 +1,176 @@
-# 修复的第175行附近
-- name: Configure ABI Filters
-  working-directory: TVBoxOSC
-  run: |
-    echo "🏗️ 配置架构过滤器..."
+name: TVBox Universal Build
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      user_name:
+        description: 'GitHub用户名'
+        required: true
+        default: 'q215613905'
+        type: string
+      repo_name:
+        description: '仓库名'
+        required: true
+        default: 'TVBoxOS'
+        type: string
+      branch_name:
+        description: '分支名'
+        required: true
+        default: 'main'
+        type: string
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mobile
+          - tv
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - build_type: 'mobile'
+            variant: 'Release'
+          - build_type: 'tv'
+            variant: 'TvRelease'
     
-    # 获取架构信息
-    ARCH="${{ matrix.architecture }}"
-    ABI_FILTER="${{ matrix.abi_filters }}"
-    
-    echo "架构: $ARCH"
-    echo "ABI过滤器: $ABI_FILTER"
-    
-    # 根据架构配置过滤器
-    if [ "$ABI_FILTER" = "arm64" ]; then
-      echo "设置 ARM64 架构过滤器..."
-      
-      # 在 app/build.gradle 中添加 ndk 配置
-      if [ -f "app/build.gradle" ]; then
-        # 检查是否已经有 defaultConfig 块
-        if grep -q "defaultConfig" app/build.gradle; then
-          # 在 defaultConfig 中添加 ndk 配置
-          sed -i '/defaultConfig {/a\
-  ndk {\
-      abiFilters "arm64-v8a"\
-  }' app/build.gradle
-          echo "✅ 已设置 arm64-v8a 过滤器"
-        fi
-      fi
-      
-    elif [ "$ABI_FILTER" = "arm7" ]; then
-      echo "设置 ARM7 架构过滤器..."
-      
-      # 在 app/build.gradle 中添加 ndk 配置
-      if [ -f "app/build.gradle" ]; then
-        # 检查是否已经有 defaultConfig 块
-        if grep -q "defaultConfig" app/build.gradle; then
-          # 在 defaultConfig 中添加 ndk 配置
-          sed -i '/defaultConfig {/a\
-  ndk {\
-      abiFilters "armeabi-v7a"\
-  }' app/build.gradle
-          echo "✅ 已设置 armeabi-v7a 过滤器"
-        fi
-      fi
-      
-    else
-      echo "构建所有架构（无过滤器）"
-    fi
+    steps:
+      - name: Checkout Workflow Code
+        uses: actions/checkout@v4
+        
+      - name: Display Inputs
+        run: |
+          echo "User: ${{ github.event.inputs.user_name }}"
+          echo "Repo: ${{ github.event.inputs.repo_name }}"
+          echo "Branch: ${{ github.event.inputs.branch_name }}"
+          echo "Build Type: ${{ matrix.build_type }}"
+          echo "Variant: ${{ matrix.variant }}"
+          
+      - name: Clone Source Code
+        run: |
+          git clone https://github.com/${{ github.event.inputs.user_name }}/${{ github.event.inputs.repo_name }}.git TVBoxOSC
+          cd TVBoxOSC
+          git checkout ${{ github.event.inputs.branch_name }}
+          
+          # 获取版本信息
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format="%cd" --date=format:"%Y%m%d-%H%M")
+          echo "commit=$COMMIT_HASH" >> $GITHUB_ENV
+          echo "commit_date=$COMMIT_DATE" >> $GITHUB_ENV
+          echo "tag=TVBox-${COMMIT_DATE}" >> $GITHUB_ENV
+          
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Prepare Build Environment
+        working-directory: TVBoxOSC
+        run: |
+          # 创建必要的配置文件
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
+          
+          # 配置 gradle.properties
+          cat > gradle.properties << 'EOF'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.daemon=true
+EOF
+          
+          # 配置 Chaquopy Python 路径
+          PYTHON_PATH=$(which python3)
+          echo "chaquopy.python=$PYTHON_PATH" >> gradle.properties
+          echo "chaquopy.pip=install" >> gradle.properties
+          
+          # 修复 Windows Python 路径
+          find . -name "*.gradle" -type f -exec sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g" {} \;
+          
+          # 修复 gradlew
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            sed -i '1s|.*|#!/usr/bin/env bash|' gradlew
+          fi
+          
+      - name: Modify Version Info
+        working-directory: TVBoxOSC
+        run: |
+          # 修改版本名称
+          BUILD_TYPE="${{ matrix.build_type }}"
+          TAG="${{ env.tag }}"
+          
+          if [ -f "app/build.gradle" ]; then
+            sed -i "/versionName/s/versionName .*/versionName \"${TAG}-${BUILD_TYPE}\"/" app/build.gradle
+            echo "✅ Version name updated to: ${TAG}-${BUILD_TYPE}"
+          fi
+          
+      - name: Build with Gradle
+        working-directory: TVBoxOSC
+        run: |
+          echo "Building ${{ matrix.variant }} variant..."
+          ./gradlew clean assemble${{ matrix.variant }} --stacktrace
+          
+      - name: Process APK Files
+        working-directory: TVBoxOSC
+        run: |
+          # 创建输出目录
+          mkdir -p output
+          
+          BUILD_TYPE="${{ matrix.build_type }}"
+          TAG="${{ env.tag }}"
+          
+          # 查找 APK 文件
+          APK_DIR="app/build/outputs/apk/${{ matrix.variant | lower }}"
+          
+          if [ -d "$APK_DIR" ]; then
+            # 优先查找 universal 版本
+            UNIVERSAL_APK=$(find "$APK_DIR" -name "*universal*.apk" | head -1)
+            if [ -n "$UNIVERSAL_APK" ]; then
+              cp "$UNIVERSAL_APK" "output/TVBox-${BUILD_TYPE}-universal-${TAG}.apk"
+              echo "✅ Universal APK: TVBox-${BUILD_TYPE}-universal-${TAG}.apk"
+            else
+              # 如果没有 universal，使用默认 APK
+              DEFAULT_APK=$(find "$APK_DIR" -name "*.apk" | head -1)
+              if [ -n "$DEFAULT_APK" ]; then
+                cp "$DEFAULT_APK" "output/TVBox-${BUILD_TYPE}-${TAG}.apk"
+                echo "✅ Default APK: TVBox-${BUILD_TYPE}-${TAG}.apk"
+              fi
+            fi
+          else
+            echo "❌ APK directory not found: $APK_DIR"
+          fi
+          
+          # 显示文件
+          echo "📁 Output files:"
+          ls -la output/
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBox-${{ matrix.build_type }}-${{ env.tag }}
+          path: TVBoxOSC/output/*.apk
+          
+      - name: Build Summary
+        run: |
+          echo "========================================"
+          echo "✅ Build Completed Successfully!"
+          echo "========================================"
+          echo "Build Type: ${{ matrix.build_type }}"
+          echo "Variant: ${{ matrix.variant }}"
+          echo "Version: ${{ env.tag }}"
+          echo "Commit: ${{ env.commit }}"
+          echo "========================================"
