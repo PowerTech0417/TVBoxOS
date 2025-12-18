@@ -8,19 +8,48 @@ on:
       rebuild:
         description: '忽略构建记录以重新构建'
         required: false
+        default: false
         type: boolean
       donotpublish:
         description: '构建后不提交发布新版'
         required: false
+        default: false
         type: boolean
+      # 新增输入参数
+      target_user:
+        description: '要构建的用户名（留空使用默认矩阵）'
+        required: false
+        default: ''
+        type: string
+      target_repo:
+        description: '要构建的仓库名（留空使用默认矩阵）'
+        required: false
+        default: ''
+        type: string
+      target_branch:
+        description: '要构建的分支（留空使用默认矩阵）'
+        required: false
+        default: ''
+        type: string
+      java_version:
+        description: 'Java版本（留空使用默认）'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # 动态设置矩阵
       matrix:
-        include:
+        ${{ github.event_name == 'workflow_dispatch' && 'include' }}:
+          - userName: ${{ github.event.inputs.target_user || 'q215613905' }}
+            repoName: ${{ github.event.inputs.target_repo || 'TVBoxOS' }}
+            branchName: ${{ github.event.inputs.target_branch || 'main' }}
+            java_ver: ${{ github.event.inputs.java_version || '17' }}
+        ${{ github.event_name != 'workflow_dispatch' && 'include' }}:
           - userName: q215613905
             repoName: TVBoxOS
             branchName: main
@@ -37,7 +66,7 @@ jobs:
           if [[ -z "${commit}" ]]; then
             commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha' )
           fi
-          if ! grep -q "$commit" README.md || [ "${{ inputs.rebuild }}" == "true" ]; then
+          if ! grep -q "$commit" README.md || [ "${{ github.event.inputs.rebuild || 'false' }}" == "true" ]; then
             echo "commit=$commit" >> $GITHUB_ENV
             echo "commitS=${commit:0:7}" >> $GITHUB_ENV
           fi
@@ -143,7 +172,7 @@ jobs:
           path: |
             TVBoxOSC/apk/*
       - name: Whether Or Not to Publish
-        if: ${{ inputs.donotpublish && env.commit }}
+        if: ${{ github.event.inputs.donotpublish && env.commit }}
         run: |
           echo "commit=" >> $GITHUB_ENV
   clean:
